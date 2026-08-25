@@ -32,6 +32,10 @@ const fmtPrice = (n: number | undefined) =>
 export default function Dashboard() {
   const [tab, setTab] = useState<'3/3' | '2/3' | 'all'>('3/3');
   const [search, setSearch] = useState('');
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [liveChanges, setLiveChanges] = useState<Record<string, number>>({});
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<string>('');
 
   const filtered = useMemo(() => {
     let rows = typedData.stocks;
@@ -48,6 +52,30 @@ export default function Dashboard() {
     }
     return rows;
   }, [tab, search]);
+
+  const refreshPrices = async () => {
+    if (filtered.length === 0) return;
+    setRefreshing(true);
+    try {
+      const symbols = filtered.map((r) => `${r.Symbol}.NS`).join(',');
+      const res = await fetch(`/api/prices?symbols=${encodeURIComponent(symbols)}`);
+      const data = await res.json();
+      const priceMap: Record<string, number> = {};
+      const changeMap: Record<string, number> = {};
+      data.forEach((p: any) => {
+        const sym = p.symbol.replace('.NS', '');
+        priceMap[sym] = p.price;
+        changeMap[sym] = p.changePercent;
+      });
+      setLivePrices(priceMap);
+      setLiveChanges(changeMap);
+      setLastRefresh(new Date().toLocaleTimeString());
+    } catch (e) {
+      alert('Failed to fetch live prices');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const counts = {
     '3/3': typedData.stocks.filter((r) => r.Score === '3/3').length,
@@ -68,17 +96,27 @@ export default function Dashboard() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Mehta 3/3 NSE Screener</h1>
             <p className="text-sm text-slate-500 mt-1">
-              Last updated: {typedData.generated_at || 'Unknown'}
+              Last screener run: {typedData.generated_at || 'Unknown'}
+              {lastRefresh && <span className="ml-3 text-emerald-600 font-medium">● Live prices refreshed at {lastRefresh}</span>}
             </p>
           </div>
-          <a
-            href="https://github.com/thejaduijin/growth_scanner/actions"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition"
-          >
-            ▶️ Run Screener on GitHub Actions
-          </a>
+          <div className="flex gap-2">
+            <button
+              onClick={refreshPrices}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 text-white text-sm font-medium rounded-lg transition"
+            >
+              {refreshing ? '⏳ Fetching...' : '🔄 Refresh Live Prices'}
+            </button>
+            <a
+              href="https://github.com/thejaduijin/growth_scanner/actions"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition"
+            >
+              ▶️ Run Screener
+            </a>
+          </div>
         </div>
       </header>
 
@@ -137,6 +175,7 @@ export default function Dashboard() {
                   <th className="px-4 py-3 text-left">Action</th>
                   <th className="px-4 py-3 text-left">Industry</th>
                   <th className="px-4 py-3 text-right">Price</th>
+                  <th className="px-4 py-3 text-right">Live Change</th>
                   <th className="px-4 py-3 text-right">ATH</th>
                   <th className="px-4 py-3 text-right">52W Ret</th>
                   <th className="px-4 py-3 text-center">Nifty</th>
@@ -147,35 +186,55 @@ export default function Dashboard() {
               <tbody className="divide-y divide-slate-100">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={12} className="px-4 py-8 text-center text-slate-400">
                       No stocks match your filters.
                     </td>
                   </tr>
                 )}
-                {filtered.map((row, i) => (
-                  <tr key={i} className="hover:bg-slate-50 transition">
-                    <td className="px-4 py-3 font-bold text-slate-900">{row.Symbol}</td>
-                    <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{row.Company}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${scoreColor(row.Score)}`}>
-                        {row.Score}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700 max-w-xs truncate">{row.Action}</td>
-                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.Industry}</td>
-                    <td className="px-4 py-3 text-right font-mono text-slate-700">{fmtPrice(row['Current Price'])}</td>
-                    <td className="px-4 py-3 text-right font-mono text-slate-500">{fmtPrice(row.ATH)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-slate-700">{fmtPct(row['52W Return'])}</td>
-                    <td className="px-4 py-3 text-center">{row['Beats Nifty500'] ? '✅' : '❌'}</td>
-                    <td className="px-4 py-3 text-center">{row['Beats Sector'] ? '✅' : '❌'}</td>
-                    <td className="px-4 py-3 text-center">{row['Record PAT?'] ? '✅' : '❌'}</td>
-                  </tr>
-                ))}
+                {filtered.map((row, i) => {
+                  const livePrice = livePrices[row.Symbol];
+                  const liveChange = liveChanges[row.Symbol];
+                  const isLive = livePrice != null;
+                  return (
+                    <tr key={i} className="hover:bg-slate-50 transition">
+                      <td className="px-4 py-3 font-bold text-slate-900">{row.Symbol}</td>
+                      <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{row.Company}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${scoreColor(row.Score)}`}>
+                          {row.Score}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-700 max-w-xs truncate">{row.Action}</td>
+                      <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.Industry}</td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        <span className={isLive ? 'text-emerald-700 font-bold' : 'text-slate-700'}>
+                          {fmtPrice(isLive ? livePrice : row['Current Price'])}
+                        </span>
+                        {isLive && <span className="ml-1 text-[10px] text-emerald-500 font-bold">LIVE</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {liveChange != null ? (
+                          <span className={liveChange >= 0 ? 'text-emerald-600' : 'text-red-500'}>
+                            {liveChange >= 0 ? '+' : ''}{liveChange.toFixed(2)}%
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-slate-500">{fmtPrice(row.ATH)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-slate-700">{fmtPct(row['52W Return'])}</td>
+                      <td className="px-4 py-3 text-center">{row['Beats Nifty500'] ? '✅' : '❌'}</td>
+                      <td className="px-4 py-3 text-center">{row['Beats Sector'] ? '✅' : '❌'}</td>
+                      <td className="px-4 py-3 text-center">{row['Record PAT?'] ? '✅' : '❌'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
-            Showing {filtered.length} of {typedData.stocks.length} stocks
+          <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex justify-between">
+            <span>Showing {filtered.length} of {typedData.stocks.length} stocks</span>
+            <span>{Object.keys(livePrices).length > 0 ? `${Object.keys(livePrices).length} live prices loaded` : 'Click Refresh for live prices'}</span>
           </div>
         </div>
       </main>

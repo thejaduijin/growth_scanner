@@ -2,7 +2,7 @@ name: Run Mehta Screener
 
 on:
   schedule:
-    - cron: '30 1 * * *'   # 7:00 AM IST daily
+    - cron: '0 */4 * * *'   # 7:00 AM IST daily
   workflow_dispatch:
 
 jobs:
