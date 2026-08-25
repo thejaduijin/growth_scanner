@@ -29,11 +29,50 @@ const fmtPct = (n: number | undefined) =>
 const fmtPrice = (n: number | undefined) =>
   n == null ? '—' : `₹${n.toFixed(2)}`;
 
+async function fetchYahooQuotes(symbols: string[]): Promise<Record<string, { price: number; change: number }>> {
+  const batchSize = 40; // Yahoo handles ~40 symbols per request
+  const results: Record<string, { price: number; change: number }> = {};
+
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize);
+    const query = batch.map((s) => `${s}.NS`).join(',');
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(query)}`;
+
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) continue;
+
+      const json = await res.json();
+      const quotes = json.quoteResponse?.result || [];
+
+      for (const q of quotes) {
+        const sym = q.symbol?.replace('.NS', '');
+        if (sym) {
+          results[sym] = {
+            price: q.regularMarketPrice,
+            change: q.regularMarketChangePercent,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('Batch failed:', e);
+    }
+
+    // Small delay between batches to avoid rate limits
+    if (i + batchSize < symbols.length) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  return results;
+}
+
 export default function Dashboard() {
   const [tab, setTab] = useState<'3/3' | '2/3' | 'all'>('3/3');
   const [search, setSearch] = useState('');
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  const [liveChanges, setLiveChanges] = useState<Record<string, number>>({});
+  const [livePrices, setLivePrices] = useState<Record<string, { price: number; change: number }>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<string>('');
 
@@ -57,21 +96,12 @@ export default function Dashboard() {
     if (filtered.length === 0) return;
     setRefreshing(true);
     try {
-      const symbols = filtered.map((r) => `${r.Symbol}.NS`).join(',');
-      const res = await fetch(`/api/prices?symbols=${encodeURIComponent(symbols)}`);
-      const data = await res.json();
-      const priceMap: Record<string, number> = {};
-      const changeMap: Record<string, number> = {};
-      data.forEach((p: any) => {
-        const sym = p.symbol.replace('.NS', '');
-        priceMap[sym] = p.price;
-        changeMap[sym] = p.changePercent;
-      });
-      setLivePrices(priceMap);
-      setLiveChanges(changeMap);
+      const symbols = filtered.map((r) => r.Symbol);
+      const prices = await fetchYahooQuotes(symbols);
+      setLivePrices(prices);
       setLastRefresh(new Date().toLocaleTimeString());
     } catch (e) {
-      alert('Failed to fetch live prices');
+      alert('Failed to fetch live prices. Try again.');
     } finally {
       setRefreshing(false);
     }
@@ -192,9 +222,8 @@ export default function Dashboard() {
                   </tr>
                 )}
                 {filtered.map((row, i) => {
-                  const livePrice = livePrices[row.Symbol];
-                  const liveChange = liveChanges[row.Symbol];
-                  const isLive = livePrice != null;
+                  const live = livePrices[row.Symbol];
+                  const isLive = live != null;
                   return (
                     <tr key={i} className="hover:bg-slate-50 transition">
                       <td className="px-4 py-3 font-bold text-slate-900">{row.Symbol}</td>
@@ -208,14 +237,14 @@ export default function Dashboard() {
                       <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.Industry}</td>
                       <td className="px-4 py-3 text-right font-mono">
                         <span className={isLive ? 'text-emerald-700 font-bold' : 'text-slate-700'}>
-                          {fmtPrice(isLive ? livePrice : row['Current Price'])}
+                          {fmtPrice(isLive ? live.price : row['Current Price'])}
                         </span>
                         {isLive && <span className="ml-1 text-[10px] text-emerald-500 font-bold">LIVE</span>}
                       </td>
                       <td className="px-4 py-3 text-right font-mono">
-                        {liveChange != null ? (
-                          <span className={liveChange >= 0 ? 'text-emerald-600' : 'text-red-500'}>
-                            {liveChange >= 0 ? '+' : ''}{liveChange.toFixed(2)}%
+                        {live?.change != null ? (
+                          <span className={live.change >= 0 ? 'text-emerald-600' : 'text-red-500'}>
+                            {live.change >= 0 ? '+' : ''}{live.change.toFixed(2)}%
                           </span>
                         ) : (
                           <span className="text-slate-400">—</span>
