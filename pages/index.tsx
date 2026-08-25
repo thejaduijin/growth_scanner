@@ -19,62 +19,35 @@ type Stock = {
 
 const typedData = data as {
   generated_at: string;
+  universe_size: number;
   counts: Record<string, number>;
   stocks: Stock[];
 };
 
 const fmtPct = (n: number | undefined) =>
-  n == null ? '—' : `${(n * 100).toFixed(2)}%`;
+  n == null || isNaN(n) ? '—' : `${(n * 100).toFixed(2)}%`;
 
 const fmtPrice = (n: number | undefined) =>
-  n == null ? '—' : `₹${n.toFixed(2)}`;
+  n == null || isNaN(n) ? '—' : `₹${n.toFixed(2)}`;
 
-async function fetchYahooQuotes(symbols: string[]): Promise<Record<string, { price: number; change: number }>> {
-  const batchSize = 40; // Yahoo handles ~40 symbols per request
-  const results: Record<string, { price: number; change: number }> = {};
-
-  for (let i = 0; i < symbols.length; i += batchSize) {
-    const batch = symbols.slice(i, i + batchSize);
-    const query = batch.map((s) => `${s}.NS`).join(',');
-    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(query)}`;
-
-    try {
-      const res = await fetch(url, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!res.ok) continue;
-
-      const json = await res.json();
-      const quotes = json.quoteResponse?.result || [];
-
-      for (const q of quotes) {
-        const sym = q.symbol?.replace('.NS', '');
-        if (sym) {
-          results[sym] = {
-            price: q.regularMarketPrice,
-            change: q.regularMarketChangePercent,
-          };
-        }
-      }
-    } catch (e) {
-      console.warn('Batch failed:', e);
-    }
-
-    // Small delay between batches to avoid rate limits
-    if (i + batchSize < symbols.length) {
-      await new Promise((r) => setTimeout(r, 300));
-    }
+const timeAgo = (dateStr: string) => {
+  if (!dateStr || dateStr === 'Not yet run') return 'Unknown';
+  try {
+    const then = new Date(dateStr);
+    const now = new Date();
+    const mins = Math.floor((now.getTime() - then.getTime()) / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  } catch {
+    return dateStr;
   }
-
-  return results;
-}
+};
 
 export default function Dashboard() {
   const [tab, setTab] = useState<'3/3' | '2/3' | 'all'>('3/3');
   const [search, setSearch] = useState('');
-  const [livePrices, setLivePrices] = useState<Record<string, { price: number; change: number }>>({});
-  const [refreshing, setRefreshing] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState<string>('');
 
   const filtered = useMemo(() => {
     let rows = typedData.stocks;
@@ -92,32 +65,15 @@ export default function Dashboard() {
     return rows;
   }, [tab, search]);
 
-  const refreshPrices = async () => {
-    if (filtered.length === 0) return;
-    setRefreshing(true);
-    try {
-      const symbols = filtered.map((r) => r.Symbol);
-      const prices = await fetchYahooQuotes(symbols);
-      setLivePrices(prices);
-      setLastRefresh(new Date().toLocaleTimeString());
-    } catch (e) {
-      alert('Failed to fetch live prices. Try again.');
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  const counts = {
-    '3/3': typedData.stocks.filter((r) => r.Score === '3/3').length,
-    '2/3': typedData.stocks.filter((r) => r.Score === '2/3').length,
-    total: typedData.stocks.length,
-  };
+  const counts = typedData.counts;
 
   const scoreColor = (s: string) => {
     if (s === '3/3') return 'bg-emerald-500 text-white';
     if (s === '2/3') return 'bg-amber-500 text-white';
     return 'bg-red-400 text-white';
   };
+
+  const freshness = timeAgo(typedData.generated_at);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
@@ -126,44 +82,51 @@ export default function Dashboard() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Mehta 3/3 NSE Screener</h1>
             <p className="text-sm text-slate-500 mt-1">
-              Last screener run: {typedData.generated_at || 'Unknown'}
-              {lastRefresh && <span className="ml-3 text-emerald-600 font-medium">● Live prices refreshed at {lastRefresh}</span>}
+              Prices & data from:{' '}
+              <span className="font-semibold text-slate-700">
+                {typedData.generated_at || 'Unknown'}
+              </span>
+              <span className={`ml-2 px-2 py-0.5 rounded text-xs font-bold ${
+                freshness.includes('m') && !freshness.includes('d')
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-amber-100 text-amber-700'
+              }`}>
+                {freshness}
+              </span>
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              Auto-refreshes every 2 hours via GitHub Actions. Yahoo Finance blocks live browser fetches.
             </p>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={refreshPrices}
-              disabled={refreshing}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 text-white text-sm font-medium rounded-lg transition"
-            >
-              {refreshing ? '⏳ Fetching...' : '🔄 Refresh Live Prices'}
-            </button>
-            <a
-              href="https://github.com/thejaduijin/growth_scanner/actions"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition"
-            >
-              ▶️ Run Screener
-            </a>
-          </div>
+          <a
+            href="https://github.com/thejaduijin/growth_scanner/actions"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition"
+          >
+            ▶️ Run Screener Now
+          </a>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6">
         {/* Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
           <div className="bg-emerald-500 rounded-xl p-5 text-white shadow-sm">
-            <div className="text-emerald-100 text-sm font-medium">3/3 Super Performers</div>
-            <div className="text-3xl font-bold mt-1">{counts['3/3']}</div>
+            <div className="text-emerald-100 text-sm font-medium">3/3 Super</div>
+            <div className="text-3xl font-bold mt-1">{counts['3/3'] || 0}</div>
           </div>
           <div className="bg-amber-500 rounded-xl p-5 text-white shadow-sm">
-            <div className="text-amber-100 text-sm font-medium">2/3 Hold Candidates</div>
-            <div className="text-3xl font-bold mt-1">{counts['2/3']}</div>
+            <div className="text-amber-100 text-sm font-medium">2/3 Hold</div>
+            <div className="text-3xl font-bold mt-1">{counts['2/3'] || 0}</div>
+          </div>
+          <div className="bg-red-400 rounded-xl p-5 text-white shadow-sm">
+            <div className="text-red-100 text-sm font-medium">1/3 + 0/3 Exit</div>
+            <div className="text-3xl font-bold mt-1">{(counts['1/3'] || 0) + (counts['0/3'] || 0)}</div>
           </div>
           <div className="bg-slate-700 rounded-xl p-5 text-white shadow-sm">
             <div className="text-slate-300 text-sm font-medium">Total Screened</div>
-            <div className="text-3xl font-bold mt-1">{counts.total}</div>
+            <div className="text-3xl font-bold mt-1">{typedData.universe_size || typedData.stocks.length}</div>
           </div>
         </div>
 
@@ -205,7 +168,6 @@ export default function Dashboard() {
                   <th className="px-4 py-3 text-left">Action</th>
                   <th className="px-4 py-3 text-left">Industry</th>
                   <th className="px-4 py-3 text-right">Price</th>
-                  <th className="px-4 py-3 text-right">Live Change</th>
                   <th className="px-4 py-3 text-right">ATH</th>
                   <th className="px-4 py-3 text-right">52W Ret</th>
                   <th className="px-4 py-3 text-center">Nifty</th>
@@ -216,54 +178,36 @@ export default function Dashboard() {
               <tbody className="divide-y divide-slate-100">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={12} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={11} className="px-4 py-8 text-center text-slate-400">
                       No stocks match your filters.
                     </td>
                   </tr>
                 )}
-                {filtered.map((row, i) => {
-                  const live = livePrices[row.Symbol];
-                  const isLive = live != null;
-                  return (
-                    <tr key={i} className="hover:bg-slate-50 transition">
-                      <td className="px-4 py-3 font-bold text-slate-900">{row.Symbol}</td>
-                      <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{row.Company}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${scoreColor(row.Score)}`}>
-                          {row.Score}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-700 max-w-xs truncate">{row.Action}</td>
-                      <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.Industry}</td>
-                      <td className="px-4 py-3 text-right font-mono">
-                        <span className={isLive ? 'text-emerald-700 font-bold' : 'text-slate-700'}>
-                          {fmtPrice(isLive ? live.price : row['Current Price'])}
-                        </span>
-                        {isLive && <span className="ml-1 text-[10px] text-emerald-500 font-bold">LIVE</span>}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono">
-                        {live?.change != null ? (
-                          <span className={live.change >= 0 ? 'text-emerald-600' : 'text-red-500'}>
-                            {live.change >= 0 ? '+' : ''}{live.change.toFixed(2)}%
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono text-slate-500">{fmtPrice(row.ATH)}</td>
-                      <td className="px-4 py-3 text-right font-mono text-slate-700">{fmtPct(row['52W Return'])}</td>
-                      <td className="px-4 py-3 text-center">{row['Beats Nifty500'] ? '✅' : '❌'}</td>
-                      <td className="px-4 py-3 text-center">{row['Beats Sector'] ? '✅' : '❌'}</td>
-                      <td className="px-4 py-3 text-center">{row['Record PAT?'] ? '✅' : '❌'}</td>
-                    </tr>
-                  );
-                })}
+                {filtered.map((row, i) => (
+                  <tr key={i} className="hover:bg-slate-50 transition">
+                    <td className="px-4 py-3 font-bold text-slate-900">{row.Symbol}</td>
+                    <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{row.Company}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${scoreColor(row.Score)}`}>
+                        {row.Score}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700 max-w-xs truncate">{row.Action}</td>
+                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{row.Industry}</td>
+                    <td className="px-4 py-3 text-right font-mono text-slate-700">{fmtPrice(row['Current Price'])}</td>
+                    <td className="px-4 py-3 text-right font-mono text-slate-500">{fmtPrice(row.ATH)}</td>
+                    <td className="px-4 py-3 text-right font-mono text-slate-700">{fmtPct(row['52W Return'])}</td>
+                    <td className="px-4 py-3 text-center">{row['Beats Nifty500'] ? '✅' : '❌'}</td>
+                    <td className="px-4 py-3 text-center">{row['Beats Sector'] ? '✅' : '❌'}</td>
+                    <td className="px-4 py-3 text-center">{row['Record PAT?'] ? '✅' : '❌'}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
           <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex justify-between">
             <span>Showing {filtered.length} of {typedData.stocks.length} stocks</span>
-            <span>{Object.keys(livePrices).length > 0 ? `${Object.keys(livePrices).length} live prices loaded` : 'Click Refresh for live prices'}</span>
+            <span>Prices from last screener run</span>
           </div>
         </div>
       </main>

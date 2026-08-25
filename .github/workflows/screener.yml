@@ -2,7 +2,7 @@ name: Run Mehta Screener
 
 on:
   schedule:
-    - cron: '0 */4 * * *'   # 7:00 AM IST daily
+    - cron: '0 */2 * * *'   # Every 2 hours
   workflow_dispatch:
 
 jobs:
@@ -39,5 +39,5 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "chore: screener update $(date +%F)"
+          git commit -m "chore: screener update $(date +%F_%H-%M)"
           git push
